@@ -1,0 +1,3 @@
+[*] Checking 2 endpoints
+google.com:443 142.251.33.174 OK 60 days 0 hours 59 mins 2025-04-28 08:36:04.000000009 UTC
+www.google.com:443 142.251.32.68 OK 60 days 1 hour 0 mins 2025-04-28 08:37:54.000000009 UTC
