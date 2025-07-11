@@ -7,6 +7,8 @@ use std::time::Duration;
 use chrono::{DateTime, TimeZone, Utc};
 use native_tls::{Certificate, TlsConnector};
 use x509_parser::prelude::*;
+use sha2::{self, Digest};
+use hex;
 use tokio::{time::Instant, task};
 
 const SOCKET_CONNECTION_TIMEOUT: Duration = Duration::from_secs(2);
@@ -28,35 +30,44 @@ fn format_time_remaining(duration: chrono::Duration) -> String {
     )
 }
 
-async fn get_certificate_time(host: &str) -> Result<(String, String, i64, String, String), Box<dyn std::error::Error>> {
+async fn get_certificate_time(host: &str) -> Result<(String, String, i64, String, String, String), Box<dyn std::error::Error>> {
     let host_pairs: Vec<&str> = host.split(":").collect();
     let h: &str = host_pairs[0];
     let p: &str = host_pairs[1];
 
     let addr: String = format!("{}:{}", h, p);
+    let sock_addr: SocketAddr = addr.to_socket_addrs()?.next().ok_or("[-] No socket address found")?;
 
-    // let sock_addr: SocketAddr = addr.to_socket_addrs()?.next().unwrap();
-    let sock_addr: SocketAddr = match addr.to_socket_addrs()?.next() {
-        Some(a) => a,
-        None => return Err("[-] No socket address found".into()),
-    };
-    // let stream: TcpStream = TcpStream::connect(addr)?;
     let stream: TcpStream = TcpStream::connect_timeout(&sock_addr, SOCKET_CONNECTION_TIMEOUT)?;
     stream.set_read_timeout(Some(SOCKET_CONNECTION_TIMEOUT))?;
     stream.set_write_timeout(Some(SOCKET_CONNECTION_TIMEOUT))?;
 
 
-    let ip: String = stream.peer_addr()?.to_string().split(":").next().unwrap_or("").to_string();
+    // let ip: String = stream.peer_addr()?.to_string().split(":").next().unwrap_or("").to_string();
+    let ip: String = stream.peer_addr()?.ip().to_string();
     let connector: TlsConnector = TlsConnector::new()?;
     let stream: native_tls::TlsStream<TcpStream> = connector.connect(h, stream)?;
     let cert: Certificate = stream.peer_certificate()?.ok_or("[-] No certificate found")?;
     let der: Vec<u8> = cert.to_der()?; // convert certificate to DER format
+
+    // SHA256 Fingerprint
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(&der);
+    let sha256_fingerprint_raw = hasher.finalize();
+    let sha256_fingerprint: String = hex::encode_upper(sha256_fingerprint_raw);
+
+    // let sha256_fingerprint: String = sha256_fingerprint_raw
+    //     .iter()
+    //     .map(|b|format!("{:02X}", b))
+    //     .collect::<Vec<String>>()
+    //     .join(":");
+
     let (_, parsed_cert) = X509Certificate::from_der(&der)?;
     let not_after: i64 = parsed_cert.validity().not_after.timestamp();
     let date:DateTime<Utc> = Utc.timestamp_opt(not_after, 9).single().ok_or("[-] Invalid timestamp")?;
     let time_remaining: chrono::TimeDelta = date.signed_duration_since(Utc::now());
     let day_remaining: i64 = time_remaining.num_days();
-    Ok((host.to_string(), ip, day_remaining, format_time_remaining(time_remaining), date.to_string()))
+    Ok((host.to_string(), ip, day_remaining, format_time_remaining(time_remaining), date.to_string(), sha256_fingerprint))
 }
 
 async fn check_certificates_all(filename: &str) -> io::Result<()> {
@@ -84,9 +95,9 @@ async fn check_certificates_all(filename: &str) -> io::Result<()> {
         // let results_sorte_clone: Arc<Mutex<Vec<String>>> = Arc::clone(&results_sorted);
         let task: tokio::task::JoinHandle<Option<_>> = tokio::spawn(async move {
             match get_certificate_time(&host_clone).await {
-                Ok((host, ip, day_remaining, time_remaining_txt, date)) => {
+                Ok((host, ip, day_remaining, time_remaining_txt, date, sha256fingerprint)) => {
                     let status: String = if day_remaining < DAYS_THRESHOLD {"WARN".to_string()} else {"OK".to_string()};
-                    let line: String = format!("{} {} {} {} {}", host, ip ,status, time_remaining_txt, date);
+                    let line: String = format!("{} {} {} {} {} {}", host, ip, sha256fingerprint, status, time_remaining_txt, date);
                     // let mut arr: std::sync::MutexGuard<'_, Vec<String>> = results_sorte_clone.lock().unwrap();
                     // println!("{}", line);
                     // arr[index] = line.clone();
