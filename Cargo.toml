@@ -1,5 +1,5 @@
 [package]
-name = "Ssl-checker-rust"
+name = "Ssl-checker-async-rust"
 version = "0.1.0"
 edition = "2021"
 
